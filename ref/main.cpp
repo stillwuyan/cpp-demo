@@ -102,6 +102,47 @@ void test_rref() {
     cout << "x is " << x << ",address is " << &x << endl;
 }
 
+class A {
+public:
+    A():m_ptr(new int(0)) {
+        std::cout << "default construct" << std::endl;
+    }
+    A(const A& a):m_ptr(new int(*a.m_ptr)) {
+        std::cout << "copy construct" << std::endl;
+    }
+    A(A&& a):m_ptr(a.m_ptr) {
+        a.m_ptr = nullptr;
+        std::cout << "move construct" << std::endl;
+    }
+    ~A() {
+        if (m_ptr) {
+            delete m_ptr;
+            m_ptr = nullptr;
+        }
+        std::cout << "destruct" << std::endl;
+    }
+private:
+    int* m_ptr;
+};
+
+A GetA() {
+    return A();
+}
+
+void test_rvo() {
+    A a = GetA();
+    A a2 = A(GetA());
+    A a3 = std::move(a);
+}
+
+void test_array() {
+    char a[10] = {0};
+    char&& b = std::move(a[0]);
+
+    std::cout << "a[0] address is " << std::hex << static_cast<void*>(&a[0]) << std::endl;
+    std::cout << "b address is " << static_cast<void*>(&b) << std::endl;
+}
+
 int main()
 {
     //test_f();
@@ -109,6 +150,8 @@ int main()
     //test_delay();
     //test_move();
     //test_forward();
-    test_rref();
+    //test_rref();
+    //test_rvo();
+    test_array();
     return 0;
 }
