@@ -1,3 +1,7 @@
-*.o
-*.exe
+test
 *.out
+*.o
+*.so
+*.a
+*.txt
+build/
