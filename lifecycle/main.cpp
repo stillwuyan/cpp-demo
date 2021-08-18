@@ -30,9 +30,8 @@ private:
 int main() {
     A a1(1);
     {
-        B(100);
         B b1(1);
-        B&& b0 = std::move(b1);
+        B&& b0(B(100)); // no move constructor printed, it is copy elision
         B b2(2);
         A a2(2);
     }
