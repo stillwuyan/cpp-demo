@@ -23,7 +23,7 @@ public:
             return -1;
         }
 
-        static const uint32_t len = 1024;
+        static const uint32_t len = 4096;
         char buffer[len] = {0};
         uint32_t offset = 0;
         int ret = 0;
@@ -42,7 +42,7 @@ public:
                 offset = len - eol_pos - 1;
                 memcpy(buffer, &text[eol_pos+1], offset);
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         return 0;
     }
@@ -76,7 +76,7 @@ protected:
 
 class NetSource: public IPipeline {
 public:
-    NetSource(const std::string& file): _file(file) {
+    NetSource(std::string&& file): _file(file) {
         _sockfd = socket(AF_INET, SOCK_STREAM, 0);
         if (_sockfd == -1) {
             std::cout << "ERROR opening socket" << std::endl;
@@ -127,6 +127,7 @@ public:
         if (_sockfd != -1) {
             close(_sockfd);
         }
+        _save.flush();
         _save.close();
     }
 
@@ -157,12 +158,15 @@ private:
         return offset;
     }
     int write(const std::string& line) override {
-        static const int max_count = 100000;
+        static const int max_count = 50000;
         _save.write(&line[0], line.size());
         _line_no++;
-        if (_line_no == max_count) {
+        if (_line_no >= max_count) {
+            std::cout << "INFO reach to the maximum lines, need open new file " << _index << std::endl;
+            _save.flush();
             _save.close();
             _index = (_index + 1) % 5;
+            std::cout << "INFO open " << _file+_suffix_list[_index] << std::endl;
             _save.open(_file+_suffix_list[_index], std::fstream::out|std::fstream::binary);
         }
     }
@@ -177,7 +181,7 @@ private:
     int _index;
     int _sockfd;
     int _line_no;
-    const std::string& _file;
+    const std::string _file;
     std::fstream _save;
 
     static bool _stop;
@@ -185,7 +189,7 @@ private:
 
 class FileSource: public IPipeline {
 public:
-    FileSource(const std::string& file) {
+    FileSource(std::string&& file) {
         _source.open("log.txt", std::fstream::in|std::fstream::binary);
 
         _save.open(file, std::fstream::out|std::fstream::binary);
@@ -198,6 +202,7 @@ public:
     }
     virtual ~FileSource() {
         _source.close();
+        _save.flush();
         _save.close();
     }
 
@@ -223,8 +228,7 @@ private:
 
 bool NetSource::_stop = false;
 int main(int argc, char* argv[]) {
-    std::unique_ptr<IPipeline> pipeline = std::make_unique<FileSource>("./output.txt");
-    //std::unique_ptr<IPipeline> pipeline = std::make_unique<NetSource>("/run/displaymanager");
+    std::unique_ptr<IPipeline> pipeline = std::make_unique<NetSource>("/run/displaymanager");
     pipeline->output(R"(/displaymanagement|\[displaymanager|\[user\] weston)");
 
     return 0;
