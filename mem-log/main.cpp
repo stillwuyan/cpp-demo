@@ -228,6 +228,7 @@ private:
 
 bool NetSource::_stop = false;
 int main(int argc, char* argv[]) {
+    //std::unique_ptr<IPipeline> pipeline = std::make_unique<FileSource>("./output.txt");
     std::unique_ptr<IPipeline> pipeline = std::make_unique<NetSource>("/run/displaymanager");
     pipeline->output(R"(/displaymanagement|\[displaymanager|\[user\] weston)");
 
