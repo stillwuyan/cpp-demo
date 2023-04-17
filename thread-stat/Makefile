@@ -1,4 +1,4 @@
-CXX=g++
+CXX?=g++
 all: main.cpp
 	$(CXX) --std=c++14 -O1 main.cpp -o cap_stat -lpthread
 	realpath cap_stat
