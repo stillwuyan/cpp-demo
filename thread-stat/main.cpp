@@ -236,13 +236,17 @@ int main(int argc, char* argv[])
     }
 
     timespec ts = {0,0};
+    timespec ts_wall = {0,0};
     uint64_t timestamp_us = 0UL;
+    uint64_t wall_us = 0UL;
     while (!g_stop) {
         //auto start = std::chrono::steady_clock::now();
         std::ifstream in;
+        clock_gettime(CLOCK_REALTIME, &ts_wall);
         clock_gettime(CLOCK_MONOTONIC, &ts);
         timestamp_us = ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
-        out << 't' << timestamp_us << '\n';
+        wall_us = ts_wall.tv_sec * 1000000 + ts_wall.tv_nsec / 1000;
+        out << 't' << timestamp_us << ' ' << wall_us << '\n';
 
         loop_proc([&in, &out](const char* task_stat){
             in.open(task_stat);
