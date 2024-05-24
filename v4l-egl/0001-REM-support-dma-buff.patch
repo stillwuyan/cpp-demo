@@ -1,0 +1,476 @@
+From 68b99e2159355846dd165fb8ba275efdfaa5e21d Mon Sep 17 00:00:00 2001
+From: "stillwuyan" <stillwuyan@126.com>
+Date: Fri, 24 May 2024 14:35:47 +0800
+Subject: [PATCH] %REM% support dma-buff
+
+---
+ camera.c  | 142 ++++++++++++++++++++++++++++++++++++++++++++++--------
+ camera.h  |   3 ++
+ main.c    | 113 +++++++++++++++++++++++--------------------
+ wayland.c |  44 ++++++++++++++---
+ wayland.h |   7 ++-
+ 5 files changed, 229 insertions(+), 80 deletions(-)
+
+diff --git a/camera.c b/camera.c
+index f191cc9..836fb15 100644
+--- a/camera.c
++++ b/camera.c
+@@ -60,6 +60,7 @@
+ ======================================*/
+ 
+ struct buffer {
++    int fd;
+     void    *start;
+     size_t  length;
+ };
+@@ -235,6 +236,83 @@ camera_read_frame(struct camera_ctx *ctx, void *dest, unsigned int dest_size)
+     return (status == 1) ? true : false;
+ }
+ 
++bool
++camera_frame_begin(struct camera_ctx *ctx)
++{
++    fd_set fds;
++    struct timeval tv;
++    int status;
++
++    if (!ctx)
++        return false;
++
++    do {
++        FD_ZERO(&fds);
++        FD_SET(ctx->fd, &fds);
++
++        tv.tv_sec = 2;
++        tv.tv_usec = 0;
++
++        status = select(ctx->fd + 1, &fds, NULL, NULL, &tv);
++        if (status == -1) {
++            if (errno == EINTR)
++                continue;
++
++            LOG_PERROR("select");
++            return false;
++        }
++
++        if (status == 0) {
++            LOG_ERROR("select timeout");
++            return false;
++        }
++
++        struct v4l2_buffer buf;
++
++        memset(&buf, 0, sizeof(buf));
++        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++        buf.memory = V4L2_MEMORY_MMAP;
++        buf.index = 0;
++        if (xioctl(ctx->fd, VIDIOC_DQBUF, &buf) < 0) {
++            if (errno == EAGAIN) {
++                continue;
++            } else {
++                LOG_PERROR("VIDIOC_DQBUF");
++                return false;
++            }
++        }
++        if (buf.index >= ctx->buffers_nr) {
++            LOG_ERROR("buf.index(%u) >= buffers_nr(%u)", buf.index, ctx->buffers_nr);
++            return false;
++        }
++
++        break;
++        /* EAGAIN - continue select loop */
++    } while(1);
++
++    return true;
++}
++
++bool
++camera_frame_end(struct camera_ctx *ctx)
++{
++    if (!ctx)
++        return false;
++
++    struct v4l2_buffer buf;
++
++    memset(&buf, 0, sizeof(buf));
++    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++    buf.memory = V4L2_MEMORY_MMAP;
++    buf.index = 0;
++    if (xioctl(ctx->fd, VIDIOC_QBUF, &buf) < 0) {
++        LOG_PERROR("VIDIOC_QBUF");
++        return false;
++    }
++
++    return true;
++}
++
+ uint32_t
+ camera_get_width(struct camera_ctx *ctx)
+ {
+@@ -404,7 +482,8 @@ init_mmap(struct camera_ctx *ctx)
+         return false;
+ 
+     memset(&req, 0, sizeof(req));
+-    req.count = 4;
++    /* req.count = 4; */
++    req.count = 1;
+     req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+     req.memory = V4L2_MEMORY_MMAP;
+     if (xioctl(ctx->fd, VIDIOC_REQBUFS, &req) < 0) {
+@@ -416,10 +495,10 @@ init_mmap(struct camera_ctx *ctx)
+         return false;
+     }
+ 
+-    if (req.count < 2) {
+-        LOG_ERROR("Insufficient buffer memory on %s", ctx->dev_name);
+-        return false;
+-    }
++    /* if (req.count < 2) { */
++    /*     LOG_ERROR("Insufficient buffer memory on %s", ctx->dev_name); */
++    /*     return false; */
++    /* } */
+ 
+     ctx->buffers = calloc(req.count, sizeof(struct buffer));
+     if (!ctx->buffers) {
+@@ -428,24 +507,36 @@ init_mmap(struct camera_ctx *ctx)
+     }
+ 
+     for (ctx->buffers_nr = 0; ctx->buffers_nr < req.count; ctx->buffers_nr++) {
+-        struct v4l2_buffer buf;
+-
+-        memset(&buf, 0, sizeof(buf));
+-        buf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+-        buf.memory = V4L2_MEMORY_MMAP;
+-        buf.index  = ctx->buffers_nr;
+-        if (xioctl(ctx->fd, VIDIOC_QUERYBUF, &buf) < 0) {
+-            LOG_PERROR("VIDIOC_QUERYBUF");
+-            return false;
+-        }
+-
+-        ctx->buffers[ctx->buffers_nr].length = buf.length;
+-        ctx->buffers[ctx->buffers_nr].start =
+-            mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, ctx->fd, buf.m.offset);
+-        if (ctx->buffers[ctx->buffers_nr].start == MAP_FAILED) {
+-            LOG_PERROR("mmap");
++        /* struct v4l2_buffer buf; */
++
++        /* memset(&buf, 0, sizeof(buf)); */
++        /* buf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE; */
++        /* buf.memory = V4L2_MEMORY_MMAP; */
++        /* buf.index  = ctx->buffers_nr; */
++        /* if (xioctl(ctx->fd, VIDIOC_QUERYBUF, &buf) < 0) { */
++        /*     LOG_PERROR("VIDIOC_QUERYBUF"); */
++        /*     return false; */
++        /* } */
++
++        /* ctx->buffers[ctx->buffers_nr].length = buf.length; */
++        /* ctx->buffers[ctx->buffers_nr].start = */
++        /*     mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, ctx->fd, buf.m.offset); */
++        /* if (ctx->buffers[ctx->buffers_nr].start == MAP_FAILED) { */
++        /*     LOG_PERROR("mmap"); */
++        /*     return false; */
++        /* } */
++
++        struct v4l2_exportbuffer expbuf;
++        memset(&expbuf, 0, sizeof(expbuf));
++        expbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++        expbuf.index = ctx->buffers_nr;
++        expbuf.flags = O_RDONLY;
++        if (xioctl(ctx->fd, VIDIOC_EXPBUF, &expbuf) < 0) {
++            LOG_PERROR("VIDIOC_EXPBUF");
+             return false;
+         }
++        ctx->buffers[ctx->buffers_nr].fd = expbuf.fd;
++        printf("dmb-buf fd: %d\n", expbuf.fd);
+     }
+ 
+     return true;
+@@ -659,3 +750,12 @@ xioctl(int fh, int request, void *arg)
+     return r;
+ }
+ 
++bool camera_get_fds(struct camera_ctx *ctx, int** fds, unsigned int* size)
++{
++    *fds = malloc(ctx->buffers_nr * sizeof(int));
++    for (unsigned int i = 0; i < ctx->buffers_nr; i++) {
++        (*fds)[i] = ctx->buffers[i].fd;
++    }
++    *size = ctx->buffers_nr;
++    return true;
++}
+diff --git a/camera.h b/camera.h
+index 75a6e8a..93f03d0 100644
+--- a/camera.h
++++ b/camera.h
+@@ -51,11 +51,14 @@ bool camera_start_capturing(struct camera_ctx *ctx);
+ bool camera_stop_capturing(struct camera_ctx *ctx);
+ 
+ bool camera_read_frame(struct camera_ctx *ctx, void *dest, unsigned int dest_size);
++bool camera_frame_begin(struct camera_ctx *ctx);
++bool camera_frame_end(struct camera_ctx *ctx);
+ 
+ uint32_t camera_get_width(struct camera_ctx *ctx);
+ uint32_t camera_get_height(struct camera_ctx *ctx);
+ uint32_t camera_get_frame_size(struct camera_ctx *ctx);
+ 
++bool camera_get_fds(struct camera_ctx *ctx, int** fds, unsigned int* size);
+ #ifdef __cplusplus
+ }
+ #endif /* __cplusplus */
+diff --git a/main.c b/main.c
+index 14313f3..d31cfce 100644
+--- a/main.c
++++ b/main.c
+@@ -148,41 +148,41 @@ main(int argc, char *argv[])
+         exit(EXIT_FAILURE);
+     }
+ 
+-    buff = (unsigned char *)malloc(camera_get_frame_size(camera_ctx));
+-    if (!buff) {
+-        LOG_ERROR("Out of Memory");
+-
+-        camera_stop_capturing(camera_ctx);
+-        camera_terminate(camera_ctx);
+-        exit(EXIT_FAILURE);
+-    }
+-
+-    ret = camera_read_frame(camera_ctx, buff, camera_get_frame_size(camera_ctx));
+-    if (!ret) {
+-        free(buff);
+-        camera_stop_capturing(camera_ctx);
+-        camera_terminate(camera_ctx);
+-        exit(EXIT_FAILURE);
+-    }
+-
+-    converted = (unsigned char *)malloc(camera_get_width(camera_ctx) * camera_get_height(camera_ctx) * 4);
+-    if (!converted) {
+-        LOG_ERROR("Out of Memory");
+-
+-        free(buff);
+-        camera_stop_capturing(camera_ctx);
+-        camera_terminate(camera_ctx);
+-        exit(EXIT_FAILURE);
+-    }
+-
+-    ret = convert_yuyv_to_bgrx8888(converted, buff, camera_get_width(camera_ctx), camera_get_height(camera_ctx), use_egl);
+-    if (!ret) {
+-        free(converted);
+-        free(buff);
+-        camera_stop_capturing(camera_ctx);
+-        camera_terminate(camera_ctx);
+-        exit(EXIT_FAILURE);
+-    }
++    /* buff = (unsigned char *)malloc(camera_get_frame_size(camera_ctx)); */
++    /* if (!buff) { */
++    /*     LOG_ERROR("Out of Memory"); */
++
++    /*     camera_stop_capturing(camera_ctx); */
++    /*     camera_terminate(camera_ctx); */
++    /*     exit(EXIT_FAILURE); */
++    /* } */
++
++    /* ret = camera_read_frame(camera_ctx, buff, camera_get_frame_size(camera_ctx)); */
++    /* if (!ret) { */
++    /*     free(buff); */
++    /*     camera_stop_capturing(camera_ctx); */
++    /*     camera_terminate(camera_ctx); */
++    /*     exit(EXIT_FAILURE); */
++    /* } */
++
++    /* converted = (unsigned char *)malloc(camera_get_width(camera_ctx) * camera_get_height(camera_ctx) * 4); */
++    /* if (!converted) { */
++    /*     LOG_ERROR("Out of Memory"); */
++
++    /*     free(buff); */
++    /*     camera_stop_capturing(camera_ctx); */
++    /*     camera_terminate(camera_ctx); */
++    /*     exit(EXIT_FAILURE); */
++    /* } */
++
++    /* ret = convert_yuyv_to_bgrx8888(converted, buff, camera_get_width(camera_ctx), camera_get_height(camera_ctx), use_egl); */
++    /* if (!ret) { */
++    /*     free(converted); */
++    /*     free(buff); */
++    /*     camera_stop_capturing(camera_ctx); */
++    /*     camera_terminate(camera_ctx); */
++    /*     exit(EXIT_FAILURE); */
++    /* } */
+ 
+     if (use_egl) {
+         SCREEN_WIDTH = width;
+@@ -191,7 +191,10 @@ main(int argc, char *argv[])
+ 
+     LOG_DEBUG("camera w: %d, h: %d, screen w: %d, h: %d", width, height, SCREEN_WIDTH, SCREEN_HEIGHT);
+ 
+-    wayland_ctx = wayland_init(4444, SCREEN_WIDTH, SCREEN_HEIGHT, use_egl, raw);
++    int* fds = NULL;
++    unsigned int size = 0;
++    camera_get_fds(camera_ctx, &fds, &size);
++    wayland_ctx = wayland_init(4444, SCREEN_WIDTH, SCREEN_HEIGHT, use_egl, raw, fds, size);
+     if (!wayland_ctx) {
+         free(converted);
+         free(buff);
+@@ -211,23 +214,29 @@ main(int argc, char *argv[])
+     while (wayland_is_running()) {
+         if (!quiet)
+             util_show_fps();
+-        if (wayland_queue_buffer(wayland_ctx, converted,
+-                                 0, 0,
+-                                 camera_get_width(camera_ctx), camera_get_height(camera_ctx),
+-                                 use_egl)) {
+-
+-            ret = camera_read_frame(camera_ctx, buff, camera_get_frame_size(camera_ctx));
+-            if (!ret)
+-                break;
+-            memset(converted, 0, camera_get_width(camera_ctx) * camera_get_height(camera_ctx) * 4);
+-            if (raw) {
+-                ret = convert_yuyv_to_bgrx8888(converted, buff, camera_get_width(camera_ctx), camera_get_height(camera_ctx), use_egl);
+-            } else {
+-                ret = convert_jpeg_to_bgrx8888(converted, buff, rgb_buffer, camera_get_frame_size(camera_ctx), camera_get_width(camera_ctx), camera_get_height(camera_ctx), use_egl);
+-            }
+-            if (!ret)
+-                break;
++        /* if (wayland_queue_buffer(wayland_ctx, converted, */
++        /*                          0, 0, */
++        /*                          camera_get_width(camera_ctx), camera_get_height(camera_ctx), */
++        /*                          use_egl)) { */
++
++        /*     ret = camera_read_frame(camera_ctx, buff, camera_get_frame_size(camera_ctx)); */
++        /*     if (!ret) */
++        /*         break; */
++        /*     memset(converted, 0, camera_get_width(camera_ctx) * camera_get_height(camera_ctx) * 4); */
++        /*     if (raw) { */
++        /*         ret = convert_yuyv_to_bgrx8888(converted, buff, camera_get_width(camera_ctx), camera_get_height(camera_ctx), use_egl); */
++        /*     } else { */
++        /*         ret = convert_jpeg_to_bgrx8888(converted, buff, rgb_buffer, camera_get_frame_size(camera_ctx), camera_get_width(camera_ctx), camera_get_height(camera_ctx), use_egl); */
++        /*     } */
++        /*     if (!ret) */
++        /*         break; */
++        /* } */
++        bool ret = camera_frame_begin(camera_ctx);
++        if (ret) {
++            wayland_redraw(wayland_ctx);
++            camera_frame_end(camera_ctx);
+         }
++
+         if (!use_egl && wayland_dispatch_event(wayland_ctx) < 0)
+             break;
+ 
+diff --git a/wayland.c b/wayland.c
+index 48d710e..9fd7ad8 100644
+--- a/wayland.c
++++ b/wayland.c
+@@ -116,7 +116,7 @@ static int running = 1;
+ ======================================*/
+ 
+ struct wayland_ctx *
+-wayland_init(unsigned int surfaceId, unsigned int width, unsigned int height, bool use_egl, bool raw)
++wayland_init(unsigned int surfaceId, unsigned int width, unsigned int height, bool use_egl, bool raw, int* fds, unsigned int size)
+ {
+     direct_yuv = raw;
+     struct sigaction sigint;
+@@ -171,7 +171,34 @@ wayland_init(unsigned int surfaceId, unsigned int width, unsigned int height, bo
+     display->ctx = ctx;
+ 
+     if (use_egl) {
+-        window->gl.textureId = CreateSimpleTexture2D(window->width, window->height, ctx->buffer, GL_RGBA);
++        /* window->gl.textureId = CreateSimpleTexture2D(window->width, window->height, ctx->buffer, GL_RGBA); */
++
++        // EGL: Create EGL image from the GL texture
++        printf("create image fd: %d\n", fds[0]);
++        EGLAttrib const attribute_list[] = {
++            EGL_WIDTH, width/2,
++            EGL_HEIGHT, height,
++            EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ABGR8888,
++            EGL_DMA_BUF_PLANE0_FD_EXT, fds[0],
++            EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
++            EGL_DMA_BUF_PLANE0_PITCH_EXT, width * 2,
++            EGL_NONE};
++        EGLImage image = eglCreateImage(display->egl.dpy,
++                                        display->egl.ctx,
++                                        EGL_LINUX_DMA_BUF_EXT,
++                                        (EGLClientBuffer)NULL,
++                                        attribute_list);
++        assert(image != EGL_NO_IMAGE);
++
++        // GLES (extension: GL_OES_EGL_image_external): Create GL texture from EGL image
++        GLuint texture;
++        glGenTextures(1, &texture);
++        glBindTexture(GL_TEXTURE_2D, texture);
++        glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++        window->gl.image = image;
++        window->gl.textureId = texture;
+         redraw_gl(window, NULL, 0);
+     }
+ 
+@@ -253,6 +280,11 @@ wayland_queue_buffer(struct wayland_ctx *ctx, void *buff, unsigned int x, unsign
+     return true;
+ }
+ 
++bool wayland_redraw(struct wayland_ctx* ctx)
++{
++    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, ctx->window->gl.image);
++    redraw_gl(ctx->window, NULL, 0);
++}
+ 
+ /*======================================
+     Inner functions
+@@ -996,10 +1028,10 @@ redraw_gl(void *data, struct wl_callback *callback, uint32_t time)
+     struct display *display = window->display;
+     struct wayland_ctx *ctx = window->display->ctx;
+ 
+-    if (ctx->buffer_empty) {
+-        printf("not redraw\n");
+-        return;
+-    }
++    /* if (ctx->buffer_empty) { */
++    /*     printf("not redraw\n"); */
++    /*     return; */
++    /* } */
+ 
+ 	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+ 
+diff --git a/wayland.h b/wayland.h
+index 0bd3dd3..9830c32 100644
+--- a/wayland.h
++++ b/wayland.h
+@@ -59,6 +59,8 @@
+ #include <EGL/egl.h>
+ #include <EGL/eglext.h>
+ 
++#include <drm/drm_fourcc.h>
++
+ #include "helpers.h"
+ #include "platform.h"
+ #include "weston-egl-ext.h"
+@@ -114,6 +116,8 @@ struct window {
+ 		GLuint coo;
+ 		GLuint textureId;
+ 		GLint texture;
++        EGLImage image;
++        int fds;
+ 	} gl;
+ 	uint32_t benchmark_time, frames;
+     int delay;
+@@ -136,7 +140,7 @@ struct wayland_ctx {
+ /* extern "C" { */
+ /* #endif /\* __cplusplus *\/ */
+ 
+-struct wayland_ctx *wayland_init(unsigned int surfaceId, unsigned int width, unsigned int height, bool use_egl, bool raw);
++struct wayland_ctx *wayland_init(unsigned int surfaceId, unsigned int width, unsigned int height, bool use_egl, bool raw, int* fds, unsigned int size);
+ void wayland_terminate(struct wayland_ctx *ctx, bool use_egl);
+ unsigned int wayland_get_width(struct wayland_ctx *ctx);
+ unsigned int wayland_get_height(struct wayland_ctx *ctx);
+@@ -146,6 +150,7 @@ bool wayland_queue_buffer(struct wayland_ctx *ctx, void *buff, unsigned int x, u
+ 
+ bool wayland_surface_check(struct wl_display *wlDisplay, unsigned int surfaceId);
+ void wayland_window_visible(unsigned int layerId, unsigned int surfaceId, unsigned int screenId, bool visibility, unsigned int width, unsigned int height);
++bool wayland_redraw(struct wayland_ctx* ctx);
+ 
+ /* #ifdef __cplusplus */
+ /* } */
+-- 
+2.33.0.113.g6c40894d24
+
